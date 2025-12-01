@@ -1,5 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Xeno FDE Backend - Prisma Schema
+// Multi-tenant data model for Shopify data ingestion
 
 generator client {
   provider = "prisma-client-js"
@@ -7,13 +7,70 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// User model
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// Tenant represents a Shopify store
+model Tenant {
+  id            String     @id @default(cuid())
+  name          String
+  shopDomain    String     @unique
+  webhookSecret String
+  accessToken   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  orders        Order[]
+  customers     Customer[]
+  products      Product[]
+}
+
+// Order from Shopify
+model Order {
+  id          String   @id
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId  String?
+  total       Float
+  currency    String   @default("USD")
+  orderNumber Int?
+  rawJson     Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, customerId])
+}
+
+// Customer from Shopify
+model Customer {
+  id          String   @id
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email       String
+  firstName   String?
+  lastName    String?
+  totalSpent  Float    @default(0)
+  ordersCount Int      @default(0)
+  rawJson     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, email])
+  @@index([tenantId, totalSpent])
+}
+
+// Product from Shopify
+model Product {
+  id          String   @id
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title       String
+  vendor      String?
+  productType String?
+  price       Float    @default(0)
+  rawJson     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
