@@ -34,7 +34,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/webhook', webhookRoutes);
-app.use('/admin', tenantRoutes);
 app.use('/tenants', tenantRoutes);
 
 // Health check

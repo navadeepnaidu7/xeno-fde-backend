@@ -15,8 +15,8 @@ interface MetricsQuery {
   endDate?: string;
 }
 
-// POST /admin/tenants - Register a new tenant
-router.post('/tenants', async (req: Request, res: Response) => {
+// POST /tenants - Register a new tenant
+router.post('/', async (req: Request, res: Response) => {
   try {
     const { name, shopDomain, webhookSecret, accessToken } = req.body as CreateTenantBody;
 
@@ -138,31 +138,31 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
           _sum: { total: true },
         }),
 
-        // Top 5 customers by spend
-        prisma.customer.findMany({
-          where: { tenantId: id },
-          orderBy: { totalSpent: 'desc' },
-          take: 5,
-          select: {
-            id: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-            totalSpent: true,
-            ordersCount: true,
-          },
-        }),
+        // Top 5 customers by spend (calculated from actual orders)
+        prisma.$queryRaw<Array<{ id: string; email: string; firstName: string | null; lastName: string | null; totalSpent: number; ordersCount: number }>>`
+          SELECT 
+            c.id,
+            c.email,
+            c."firstName",
+            c."lastName",
+            COALESCE(SUM(o.total), 0)::float as "totalSpent",
+            COUNT(o.id)::int as "ordersCount"
+          FROM "Customer" c
+          LEFT JOIN "Order" o ON c.id = o."customerId" AND o."tenantId" = ${id}
+          WHERE c."tenantId" = ${id}
+          GROUP BY c.id, c.email, c."firstName", c."lastName"
+          ORDER BY "totalSpent" DESC
+          LIMIT 5
+        `,
 
         // Orders grouped by date (last 30 days by default)
-        prisma.$queryRaw<Array<{ date: Date; orders: bigint; revenue: number }>>`
+        prisma.$queryRaw<Array<{ date: string; orders: bigint; revenue: number }>>`
           SELECT 
-            DATE("createdAt") as date,
+            DATE("createdAt")::text as date,
             COUNT(*)::bigint as orders,
             COALESCE(SUM(total), 0) as revenue
           FROM "Order"
           WHERE "tenantId" = ${id}
-            ${startDate ? prisma.$queryRaw`AND "createdAt" >= ${new Date(startDate)}` : prisma.$queryRaw``}
-            ${endDate ? prisma.$queryRaw`AND "createdAt" <= ${new Date(endDate)}` : prisma.$queryRaw``}
           GROUP BY DATE("createdAt")
           ORDER BY date DESC
           LIMIT 30
