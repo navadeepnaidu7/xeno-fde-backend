@@ -88,7 +88,29 @@ export async function processOrderCreated(
 
   // Upsert customer if present
   if (payload.customer) {
+    const customerId = String(payload.customer.id);
     await processCustomer(tenantId, payload.customer);
+    
+    // Update customer metrics based on all their orders
+    const [orderStats] = await prisma.$queryRaw<
+      Array<{ totalSpent: number; ordersCount: number }>
+    >`
+      SELECT 
+        COALESCE(SUM(total), 0)::float as "totalSpent",
+        COUNT(*)::int as "ordersCount"
+      FROM "Order"
+      WHERE "customerId" = ${customerId} AND "tenantId" = ${tenantId}
+    `;
+
+    if (orderStats) {
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: {
+          totalSpent: orderStats.totalSpent,
+          ordersCount: orderStats.ordersCount,
+        },
+      });
+    }
   }
 
   // Extract and upsert products from line items
