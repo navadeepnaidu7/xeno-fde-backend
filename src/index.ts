@@ -32,13 +32,23 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/webhook', webhookRoutes);
-app.use('/tenants', tenantRoutes);
+// API v1 Routes
+app.use('/api/v1/webhook', webhookRoutes);
+app.use('/api/v1/tenants', tenantRoutes);
 
-// Health check
+// Health check (keep at root for simple uptime monitoring)
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Root endpoint
+app.get('/', (req: Request, res: Response) => {
+  res.json({ 
+    message: 'Xeno FDE Backend API',
+    version: 'v1',
+    docs: '/api/v1',
+    health: '/health'
+  });
 });
 
 // 404 handler
