@@ -86,6 +86,7 @@ router.get('/:id', async (req: Request, res: Response) => {
         name: true,
         shopDomain: true,
         createdAt: true,
+        accessToken: true,
       },
     });
 
@@ -93,10 +94,49 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Tenant not found' });
     }
 
-    res.json(tenant);
+    res.json({
+      ...tenant,
+      hasAccessToken: !!tenant.accessToken,
+      accessToken: undefined, // Don't expose the actual token
+    });
   } catch (error) {
     console.error('Error fetching tenant:', error);
     res.status(500).json({ error: 'Failed to fetch tenant' });
+  }
+});
+
+// PATCH /tenants/:id - Update tenant (e.g., add access token)
+router.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { accessToken, name } = req.body;
+
+    const tenant = await prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+
+    const updated = await prisma.tenant.update({
+      where: { id },
+      data: {
+        ...(accessToken && { accessToken }),
+        ...(name && { name }),
+      },
+      select: {
+        id: true,
+        name: true,
+        shopDomain: true,
+        createdAt: true,
+      },
+    });
+
+    res.json({
+      ...updated,
+      hasAccessToken: !!accessToken || !!tenant.accessToken,
+    });
+  } catch (error) {
+    console.error('Error updating tenant:', error);
+    res.status(500).json({ error: 'Failed to update tenant' });
   }
 });
 

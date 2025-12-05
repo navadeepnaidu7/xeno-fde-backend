@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import tenantRoutes from './routes/tenants';
 import webhookRoutes from './routes/webhook';
+import syncRoutes from './routes/sync';
+import { startScheduler } from './jobs/scheduler';
 
 dotenv.config();
 
@@ -35,6 +37,7 @@ app.use(express.urlencoded({ extended: true }));
 // API v1 Routes
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/tenants', tenantRoutes);
+app.use('/api/v1/sync', syncRoutes);
 
 // Health check (keep at root for simple uptime monitoring)
 app.get('/health', (req: Request, res: Response) => {
@@ -64,6 +67,9 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  
+  // Start the scheduler for periodic sync
+  startScheduler();
 });
 
 export default app;
