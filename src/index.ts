@@ -4,6 +4,7 @@ import cors from 'cors';
 import tenantRoutes from './routes/tenants';
 import webhookRoutes from './routes/webhook';
 import syncRoutes from './routes/sync';
+import analyticsRoutes from './routes/analytics';
 import { startScheduler } from './jobs/scheduler';
 
 dotenv.config();
@@ -38,6 +39,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/webhook', webhookRoutes);
 app.use('/api/v1/tenants', tenantRoutes);
 app.use('/api/v1/sync', syncRoutes);
+app.use('/api/v1/analytics', analyticsRoutes);
 
 // Health check (keep at root for simple uptime monitoring)
 app.get('/health', (req: Request, res: Response) => {

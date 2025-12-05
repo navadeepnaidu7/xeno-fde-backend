@@ -5,6 +5,7 @@
 
 import cron, { ScheduledTask } from 'node-cron';
 import { syncAllTenants } from '../services/sync';
+import { detectAllAbandonedCheckouts } from '../services/abandonment';
 
 // Store scheduled tasks for potential cleanup
 const scheduledTasks: ScheduledTask[] = [];
@@ -12,6 +13,7 @@ const scheduledTasks: ScheduledTask[] = [];
 /**
  * Start the scheduler
  * Runs sync every 6 hours (at 00:00, 06:00, 12:00, 18:00)
+ * Runs abandonment detection every 15 minutes
  */
 export function startScheduler(): void {
   console.log('Starting job scheduler...');
@@ -29,6 +31,25 @@ export function startScheduler(): void {
 
   scheduledTasks.push(syncTask);
   console.log('Scheduler started: Sync runs every 6 hours');
+
+  // Detect abandoned checkouts every 15 minutes
+  const abandonmentTask = cron.schedule('*/15 * * * *', async () => {
+    console.log(`[${new Date().toISOString()}] Running abandonment detection...`);
+    try {
+      const result = await detectAllAbandonedCheckouts();
+      if (result.totalAbandoned > 0) {
+        console.log(
+          `Marked ${result.totalAbandoned} checkouts as abandoned:`,
+          result.tenantStats
+        );
+      }
+    } catch (error) {
+      console.error('Abandonment detection failed:', error);
+    }
+  });
+
+  scheduledTasks.push(abandonmentTask);
+  console.log('Scheduler started: Abandonment detection runs every 15 minutes');
 }
 
 /**
