@@ -17,6 +17,7 @@ interface ShopifyLineItem {
   title: string;
   price: string;
   vendor?: string;
+  quantity?: number;
 }
 
 interface ShopifyOrder {
@@ -27,6 +28,7 @@ interface ShopifyOrder {
   customer?: ShopifyCustomer;
   line_items?: ShopifyLineItem[];
   created_at?: string;
+  checkout_token?: string;
 }
 
 interface ShopifyProduct {
@@ -35,6 +37,42 @@ interface ShopifyProduct {
   vendor?: string;
   product_type?: string;
   variants?: Array<{ price: string }>;
+}
+
+interface ShopifyCheckout {
+  id: number;
+  token: string;
+  cart_token?: string;
+  email?: string;
+  total_price: string;
+  currency: string;
+  line_items?: ShopifyLineItem[];
+  completed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ShopifyCart {
+  id: string;
+  token: string;
+  line_items?: ShopifyLineItem[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ShopifyRefund {
+  id: number;
+  order_id: number;
+  note?: string;
+  created_at?: string;
+  transactions?: Array<{
+    amount: string;
+    currency: string;
+  }>;
+  refund_line_items?: Array<{
+    quantity: number;
+    subtotal: number;
+  }>;
 }
 
 // HMAC verification - pure function for testability
@@ -199,6 +237,155 @@ export async function processProduct(
   });
 }
 
+// Process checkouts/create or checkouts/update webhook
+export async function processCheckout(
+  tenantId: string,
+  payload: ShopifyCheckout
+): Promise<void> {
+  const shopifyCheckoutId = String(payload.id);
+  const totalPrice = parseFloat(payload.total_price) || 0;
+  const lineItemsCount = payload.line_items?.reduce(
+    (sum, item) => sum + (item.quantity || 1),
+    0
+  ) || 0;
+
+  // Determine status
+  const isCompleted = payload.completed_at !== null && payload.completed_at !== undefined;
+
+  await prisma.checkout.upsert({
+    where: {
+      tenantId_shopifyCheckoutId: {
+        tenantId,
+        shopifyCheckoutId,
+      },
+    },
+    create: {
+      tenantId,
+      shopifyCheckoutId,
+      shopifyCartToken: payload.cart_token || null,
+      email: payload.email || null,
+      totalPrice,
+      currency: payload.currency || 'USD',
+      status: isCompleted ? 'COMPLETED' : 'PENDING',
+      lineItemsCount,
+      completedAt: isCompleted ? new Date(payload.completed_at!) : null,
+      rawJson: payload as object,
+    },
+    update: {
+      email: payload.email || null,
+      totalPrice,
+      currency: payload.currency || 'USD',
+      status: isCompleted ? 'COMPLETED' : 'PENDING',
+      lineItemsCount,
+      completedAt: isCompleted ? new Date(payload.completed_at!) : null,
+      rawJson: payload as object,
+    },
+  });
+
+  console.log(
+    `Checkout ${shopifyCheckoutId} processed - status: ${isCompleted ? 'COMPLETED' : 'PENDING'}, total: ${totalPrice}`
+  );
+}
+
+// Process carts/create or carts/update webhook
+// Note: Shopify cart webhooks have limited data, we track cart tokens for checkout correlation
+export async function processCart(
+  tenantId: string,
+  payload: ShopifyCart
+): Promise<void> {
+  // Cart webhooks don't have full pricing info like checkouts
+  // We primarily use this to correlate carts with checkouts
+  const cartToken = payload.token;
+  
+  console.log(`Cart ${cartToken} event received for tenant ${tenantId}`);
+  
+  // Check if there's an existing checkout with this cart token
+  const existingCheckout = await prisma.checkout.findFirst({
+    where: {
+      tenantId,
+      shopifyCartToken: cartToken,
+    },
+  });
+
+  if (existingCheckout) {
+    // Update the checkout's updatedAt to track activity
+    await prisma.checkout.update({
+      where: { id: existingCheckout.id },
+      data: { updatedAt: new Date() },
+    });
+  }
+}
+
+// Process refunds/create webhook
+export async function processRefund(
+  tenantId: string,
+  payload: ShopifyRefund
+): Promise<void> {
+  const shopifyRefundId = String(payload.id);
+  const shopifyOrderId = String(payload.order_id);
+  
+  // Calculate total refund amount
+  const amount = payload.transactions?.reduce(
+    (sum, tx) => sum + (parseFloat(tx.amount) || 0),
+    0
+  ) || payload.refund_line_items?.reduce(
+    (sum, item) => sum + (item.subtotal || 0),
+    0
+  ) || 0;
+
+  const currency = payload.transactions?.[0]?.currency || 'USD';
+
+  await prisma.refund.upsert({
+    where: {
+      tenantId_shopifyRefundId: {
+        tenantId,
+        shopifyRefundId,
+      },
+    },
+    create: {
+      tenantId,
+      shopifyRefundId,
+      shopifyOrderId,
+      amount,
+      currency,
+      reason: payload.note || null,
+      rawJson: payload as object,
+    },
+    update: {
+      amount,
+      reason: payload.note || null,
+      rawJson: payload as object,
+    },
+  });
+
+  console.log(`Refund ${shopifyRefundId} processed for order ${shopifyOrderId} - amount: ${amount}`);
+}
+
+// Mark checkout as completed when order is created
+async function markCheckoutCompleted(
+  tenantId: string,
+  checkoutToken: string
+): Promise<void> {
+  // Find checkout by token (Shopify sends checkout_token in order payload)
+  const checkout = await prisma.checkout.findFirst({
+    where: {
+      tenantId,
+      shopifyCheckoutId: checkoutToken,
+    },
+  });
+
+  if (checkout && checkout.status !== 'COMPLETED') {
+    await prisma.checkout.update({
+      where: { id: checkout.id },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+      },
+    });
+    console.log(`Checkout ${checkoutToken} marked as COMPLETED via order`);
+  }
+}
+
 // Route webhook to appropriate handler based on topic
 export async function routeWebhook(
   tenantId: string,
@@ -209,6 +396,11 @@ export async function routeWebhook(
     case 'orders/create':
     case 'orders/updated':
       await processOrderCreated(tenantId, payload as ShopifyOrder);
+      // Also mark associated checkout as completed
+      const order = payload as ShopifyOrder;
+      if (order.checkout_token) {
+        await markCheckoutCompleted(tenantId, order.checkout_token);
+      }
       break;
     case 'customers/create':
     case 'customers/update':
@@ -217,6 +409,17 @@ export async function routeWebhook(
     case 'products/create':
     case 'products/update':
       await processProduct(tenantId, payload as ShopifyProduct);
+      break;
+    case 'checkouts/create':
+    case 'checkouts/update':
+      await processCheckout(tenantId, payload as ShopifyCheckout);
+      break;
+    case 'carts/create':
+    case 'carts/update':
+      await processCart(tenantId, payload as ShopifyCart);
+      break;
+    case 'refunds/create':
+      await processRefund(tenantId, payload as ShopifyRefund);
       break;
     default:
       console.log(`Unhandled webhook topic: ${topic}`);
