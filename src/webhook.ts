@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import prisma from './lib/prisma';
+import { deleteCache, CACHE_KEYS, getRedis } from './lib/redis';
 
 // Shopify webhook payload types
 interface ShopifyCustomer {
@@ -219,5 +220,30 @@ export async function routeWebhook(
       break;
     default:
       console.log(`Unhandled webhook topic: ${topic}`);
+  }
+
+  // Invalidate metrics cache for this tenant after any data change
+  await invalidateMetricsCache(tenantId);
+}
+
+// Invalidate all metrics cache entries for a tenant
+async function invalidateMetricsCache(tenantId: string): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+
+  try {
+    // Delete the base metrics cache key
+    await deleteCache(CACHE_KEYS.metrics(tenantId));
+
+    // Also delete any date-filtered cache entries
+    const pattern = `${CACHE_KEYS.metrics(tenantId)}:*`;
+    const keys = await redis.keys(pattern);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+
+    console.log(`Invalidated metrics cache for tenant ${tenantId}`);
+  } catch (err) {
+    console.error('Error invalidating cache:', err);
   }
 }

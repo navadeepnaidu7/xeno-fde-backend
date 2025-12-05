@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
+import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from '../lib/redis';
 
 const router = Router();
 
@@ -111,6 +112,20 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Tenant not found' });
     }
 
+    // Build cache key (include date filters if present)
+    const cacheKey = startDate || endDate
+      ? `${CACHE_KEYS.metrics(id)}:${startDate || ''}:${endDate || ''}`
+      : CACHE_KEYS.metrics(id);
+
+    // Try to get cached metrics
+    const cached = await getCache<object>(cacheKey);
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.json(cached);
+    }
+
+    res.setHeader('X-Cache', 'MISS');
+
     // Build date filter
     const dateFilter: { createdAt?: { gte?: Date; lte?: Date } } = {};
     if (startDate || endDate) {
@@ -169,7 +184,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
         `,
       ]);
 
-    res.json({
+    const metricsResponse = {
       customersCount,
       ordersCount,
       totalRevenue: revenueResult._sum.total || 0,
@@ -185,7 +200,12 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
         orders: Number(row.orders),
         revenue: row.revenue,
       })),
-    });
+    };
+
+    // Cache the response
+    await setCache(cacheKey, metricsResponse, CACHE_TTL.metrics);
+
+    res.json(metricsResponse);
   } catch (error) {
     console.error('Error fetching metrics:', error);
     res.status(500).json({ error: 'Failed to fetch metrics' });

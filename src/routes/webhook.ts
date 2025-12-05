@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { verifyHmac, findTenantByDomain, routeWebhook } from '../webhook';
+import { rateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 
 // POST /webhook/shopify - Handle Shopify webhooks
-router.post('/shopify', async (req: Request, res: Response) => {
+// Rate limited to 100 requests/minute per shop domain
+router.post('/shopify', rateLimiter, async (req: Request, res: Response) => {
   try {
     const hmacHeader = req.get('X-Shopify-Hmac-Sha256');
     const topic = req.get('X-Shopify-Topic');
